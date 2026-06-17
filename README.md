@@ -39,9 +39,10 @@ The eyes always pop to the same value, so a single shared STEP/DIR signal would 
 | Direction | Message | Meaning |
 |-----------|---------|---------|
 | in | `<eye>\n` | eye-pop target (0-3200, same scale as the neck) |
-| out | `S:<text>\n` | status: `S:OK`, `S:EL OT`, `S:ER SHORT`, etc. |
+| in | `CAL\n` | run a homing/calibration pass on both eyes |
+| out | `S:<text>\n` | status: `S:OK`, `S:EL OT`, `S:EL LIMIT`, etc. |
 
-The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), `SHORT`, `OTPW` (overtemp prewarning), or `OPEN` (open load). The parser uses a fixed char buffer (no Arduino `String`).
+The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), `SHORT`, `OTPW` (overtemp prewarning), `OPEN` (open load), or `LIMIT` (a limit switch is engaged or its wire is broken). The parser uses a fixed char buffer (no Arduino `String`).
 
 ## Pin assignments
 
@@ -51,6 +52,8 @@ The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), 
 | 33 / 32 | eye-right STEP / DIR |
 | 17 / 16 | TMC2209 UART TX / RX (shared PDN_UART bus) |
 | 4 / 13 | Upstream UART1 RX / TX (to neck board) |
+| 34 | eye-left limit switches (input, external pull-up) |
+| 35 | eye-right limit switches (input, external pull-up) |
 
 All links use plain bidirectional GPIOs; strapping pins (0/2/12/15), flash pins (6-11), and input-only pins (34-39) are avoided so the firmware runs on any of these WROOM boards.
 
@@ -65,8 +68,11 @@ All links use plain bidirectional GPIOs; strapping pins (0/2/12/15), flash pins 
   eye L STEP/DIR  | 26 / 25         ---> TMC2209 (eye L, addr 0b00)
   eye R STEP/DIR  | 33 / 32         ---> TMC2209 (eye R, addr 0b01)
    TMC2209 UART   | 17 TX   16 RX   (shared PDN_UART bus)|
+   limit inputs <-| 34 (EL)  35 (ER)                     |
                   |        3V3   GND   VIN   VM(12-24V)  |
                   +--------------------------------------+
+
+   Each limit input = two NC switches in series + a 10k pull-up to 3.3V.
 ```
 
 ## Power and enable
@@ -76,6 +82,15 @@ VIO on each driver goes to 3.3V, VM to the 12-24V motor supply, and all grounds 
 ## Motion settings
 
 Eye-pop motion matches the neck so it has the same smooth ramp: `EYE_SPEED_HZ` (3200), `EYE_ACCEL` (16000), `EYE_MICROSTEPS` (16), and `EYE_THRESHOLD` (20) mirror the neck values, and the eye value maps through `eye / 2` exactly like a neck axis. Only `EYE_CURRENT` is separate, since it sets the TMC2209 driver current for the small eye-pop motors (not a motion setting) and the neck's 2.1A would be far too much. Tune `EYE_CURRENT` to your motors.
+
+## Limit switches and calibration
+
+Each eye has **two normally-closed (NC) switches wired in series** to one input (GPIO 34/35), with an **external 10k pull-up to 3.3V**. Both closed (in range) reads LOW; either switch opening, or a broken wire, reads HIGH and is treated as a limit hit (fail-safe).
+
+- **In normal operation**, if a limit trips while an eye is moving, that eye is stopped immediately.
+- **On a `CAL` command** (sent down the chain by the neck board), each eye homes **independently**: it drives slowly toward the home end until the limit switch trips **or** StallGuard detects a hard stop, backs off, and zeros. StallGuard (read over the TMC2209 UART, no extra pins) catches an eye that is **already against a stop** when calibration starts -- it stalls the instant it tries to push further.
+
+The StallGuard threshold (`SG_SGTHRS`, `SG_STALL_LEVEL`) and the homing speed/back-off are `#define`s at the top of `main.cpp` and **need tuning on the real mechanism**.
 
 ## Building and uploading
 

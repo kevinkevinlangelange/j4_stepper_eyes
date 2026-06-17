@@ -23,6 +23,13 @@
 //                     the driver current is separate (small eye motors).
 //       update log:  v0_1 -- Initial build. Two independent eye channels, identical
 //                            command, DRV_STATUS fault polling, status reporting.
+//                    v0_2 -- Added limit switches (two NC per axis in series, one
+//                            input each: GPIO 34/35), StallGuard4 config + stall
+//                            detection, a CAL homing routine that stops on a limit
+//                            OR a stall (so an eye already at a stop is caught), and
+//                            a safety stop if a limit trips mid-move. Limit state is
+//                            reported in the status string. SG thresholds and homing
+//                            params still need hardware tuning.
 //
 //
 //
@@ -30,7 +37,8 @@
 //  LINK PROTOCOL (UART1, to/from j4_stepper_neck)
 //  ------------------------------------------------------------------
 //   in:  "<eye>\n"     eye-pop target value (0-3200, same scale as the neck)
-//   out: "S:<text>\n"  status, e.g. "S:OK", "S:EL OT", "S:ER SHORT"
+//   in:  "CAL\n"       run a homing/calibration pass on both eyes
+//   out: "S:<text>\n"  status, e.g. "S:OK", "S:EL OT", "S:EL LIMIT"
 //  ------------------------------------------------------------------
 //
 //
@@ -49,15 +57,24 @@
 //   04:  UART1 RX  <-- neck GPIO21 (TX)
 //   13:  UART1 TX  --> neck GPIO22 (RX)
 //
+//  Limit switches (two NC switches per axis in SERIES -> one input each, with an
+//  external 10k pull-up to 3.3V; LOW = in range, HIGH = limit hit / broken wire):
+//   34:  eye-left limits        35:  eye-right limits
+//
+//  StallGuard: read over UART (no extra pins). During calibration each eye homes
+//  to a limit switch OR a StallGuard stall (so an eye already against a stop is
+//  caught at once). Thresholds in the code need tuning on the real mechanism.
+//
 //  Power / enable:
 //   3.3V -> driver VIO        GND -> driver GND (common with ESP32)
 //   12-24V PSU -> driver VM   (PSU GND common with ESP32 GND)
 //   EN pins tied to GND -- drivers always enabled.
 //  ------------------------------------------------------------------
 //
-//  NOTE: links use plain bidirectional GPIOs; strapping pins (0/2/12/15),
-//        flash pins (6-11), and input-only pins (34-39) are avoided so this
-//        runs on any WROOM board (some route battery sense to 35, LED to 2).
+//  NOTE: links and step/dir use plain bidirectional GPIOs (strapping pins
+//        0/2/12/15 and flash pins 6-11 avoided). The input-only pins 34/35 are
+//        used for the limit inputs, which is what they are good for -- they have
+//        no internal pull-up, hence the external 10k resistors noted above.
 //
 //******************************************************************************
 
@@ -103,6 +120,31 @@
 
 
 // ---------------------------------------------------------------------------
+// LIMIT SWITCHES + STALLGUARD
+// ---------------------------------------------------------------------------
+// Two normally-closed switches per axis wired IN SERIES to one input, with an
+// external 10k pull-up to 3.3V. LOW = both closed (in range); HIGH = a limit was
+// hit OR a wire broke (fail-safe). Input-only pins, so external pull-up required.
+#define LIMIT_PIN_EL  34
+#define LIMIT_PIN_ER  35
+static inline bool limitHit(uint8_t pin) { return digitalRead(pin) == HIGH; }
+
+// StallGuard4 (read over UART). SG_RESULT drops toward 0 under load; near 0 is a
+// stall. Used during calibration so an eye already jammed against a stop is caught
+// the moment it tries to move. THESE VALUES NEED HARDWARE TUNING.
+#define SG_SGTHRS         60       // StallGuard4 threshold (0-255); higher = more sensitive
+#define SG_TCOOLTHRS  0xFFFFF      // enable StallGuard above near-standstill speed
+#define SG_STALL_LEVEL    40       // SG_RESULT below this counts as a stall (tune)
+static inline bool stalled2209(TMC2209Stepper &drv) { return drv.SG_RESULT() < SG_STALL_LEVEL; }
+
+// Homing/calibration tunables (per-hardware -- adjust on the bench).
+#define HOMING_SPEED_HZ   800      // slow approach speed
+#define HOMING_ACCEL     8000
+#define HOMING_BACKOFF    200      // microsteps to back off after touching a limit
+#define HOMING_TIMEOUT_MS 9000     // safety cap per axis
+
+
+// ---------------------------------------------------------------------------
 // DRIVERS  (shared UART, separate addresses)
 // ---------------------------------------------------------------------------
 HardwareSerial tmcSerial(2);  // UART2 -> TMC2209 PDN_UART bus
@@ -145,8 +187,11 @@ void applyEye(int eye) {
 }
 
 
-// Parse "<eye>" -- a single integer target.
+bool calRequested = false;
+
+// Parse "<eye>" (single integer target) or "CAL" (request calibration).
 void parseUpstream(const char *line) {
+  if (strcmp(line, "CAL") == 0) { calRequested = true; return; }
   int eye;
   if (sscanf(line, "%d", &eye) == 1) applyEye(eye);
 }
@@ -167,6 +212,8 @@ void buildStatus(char *out, size_t n) {
   const char *t;
   if ((t = faultToken2209(tmc_EL))[0])      snprintf(out, n, "EL %s", t);
   else if ((t = faultToken2209(tmc_ER))[0]) snprintf(out, n, "ER %s", t);
+  else if (limitHit(LIMIT_PIN_EL))          { strncpy(out, "EL LIMIT", n); out[n - 1] = '\0'; }
+  else if (limitHit(LIMIT_PIN_ER))          { strncpy(out, "ER LIMIT", n); out[n - 1] = '\0'; }
   else { strncpy(out, "OK", n); out[n - 1] = '\0'; }
 }
 
@@ -179,6 +226,60 @@ void configTmc2209(TMC2209Stepper &drv) {
   drv.microsteps(EYE_MICROSTEPS);
   drv.en_spreadCycle(false);  // StealthChop (quiet)
   drv.pwm_autoscale(true);
+  // StallGuard4 (used during calibration; needs tuning on real hardware)
+  drv.TCOOLTHRS(SG_TCOOLTHRS);
+  drv.SGTHRS(SG_SGTHRS);
+}
+
+
+// Safety: if an eye is moving and its limit trips, stop it immediately.
+void checkLimits() {
+  if (stepper_EL && stepper_EL->isRunning() && limitHit(LIMIT_PIN_EL)) stepper_EL->forceStop();
+  if (stepper_ER && stepper_ER->isRunning() && limitHit(LIMIT_PIN_ER)) stepper_ER->forceStop();
+}
+
+
+// Home one eye: drive toward the home (negative) end until the limit switch trips
+// or StallGuard detects a hard stop (catches an eye already against a stop), then
+// back off and zero. NEEDS HARDWARE VALIDATION -- direction/speed/backoff/SG tunable.
+void homeAxis(FastAccelStepper *s, uint8_t limitPin, TMC2209Stepper &drv) {
+  if (!s) return;
+  s->setSpeedInHz(HOMING_SPEED_HZ);
+  s->setAcceleration(HOMING_ACCEL);
+
+  // Approach the home (negative) end. With one shared series input we can't tell
+  // the two ends apart, so only trust the limit switch once we've seen it read
+  // clear (LOW) at least once -- that way starting against the FAR limit just
+  // drives us off it and onward to home. StallGuard stops a real jam immediately
+  // (this is what catches an eye already pinned against the HOME stop at start).
+  s->move(-1000000);
+  bool seenClear = !limitHit(limitPin);
+  unsigned long t0 = millis();
+  while (s->isRunning()) {
+    if (!limitHit(limitPin))                  seenClear = true;
+    if (stalled2209(drv))                     { s->forceStop(); break; }
+    if (seenClear && limitHit(limitPin))      { s->forceStop(); break; }
+    if (millis() - t0 > HOMING_TIMEOUT_MS)    { s->forceStop(); break; }
+    delay(1);
+  }
+  delay(50);
+
+  s->setCurrentPosition(0);
+  s->move(HOMING_BACKOFF);
+  t0 = millis();
+  while (s->isRunning() && (millis() - t0 < HOMING_TIMEOUT_MS)) delay(1);
+  s->setCurrentPosition(0);
+
+  s->setSpeedInHz(EYE_SPEED_HZ);
+  s->setAcceleration(EYE_ACCEL);
+}
+
+
+// Home both eyes independently (the whole point of separate channels).
+void calibrate() {
+  homeAxis(stepper_EL, LIMIT_PIN_EL, tmc_EL);
+  homeAxis(stepper_ER, LIMIT_PIN_ER, tmc_ER);
+  last_eye = -1;   // force a fresh move on the next packet
 }
 
 
@@ -201,6 +302,10 @@ void setup() {
 
   // --- Upstream link to the neck board ---
   upSerial.begin(LINK_BAUD, SERIAL_8N1, UP_RX_PIN, UP_TX_PIN);
+
+  // --- Limit switches (series NC, external pull-up -> plain INPUT) ---
+  pinMode(LIMIT_PIN_EL, INPUT);
+  pinMode(LIMIT_PIN_ER, INPUT);
 
   // --- TMC2209 drivers over shared UART ---
   tmcSerial.begin(115200, SERIAL_8N1, TMC2209_RX, TMC2209_TX);
@@ -234,6 +339,15 @@ void loop() {
       upLen = 0;  // overflow -- drop and resync on next newline
     }
   }
+
+  // Run a calibration pass if one was requested (blocks while homing).
+  if (calRequested) {
+    calRequested = false;
+    calibrate();
+  }
+
+  // Safety: stop any eye whose limit trips mid-move.
+  checkLimits();
 
   unsigned long now = millis();
 
