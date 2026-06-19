@@ -34,6 +34,10 @@
 //                    v0_3 -- Moved the ER limit input off GPIO 35 to GPIO 36 (some
 //                            LiPo dev boards route battery sense to GPIO 35). Limits
 //                            are now 34 (EL) / 36 (ER); 35 and 39 are free.
+//                    v0_4 -- Board confirmed as a bare ESP32-D0WD (onboard LED on
+//                            GPIO 22, unused here). Doc update only: the neck's
+//                            downstream RX moved to GPIO 35, so this board's TX
+//                            (pin 13) now wires to neck GPIO 35.
 //
 //
 //
@@ -59,7 +63,9 @@
 //
 //  Upstream link to j4_stepper_neck, UART1, 2-way:
 //   04:  UART1 RX  <-- neck GPIO21 (TX)
-//   13:  UART1 TX  --> neck GPIO22 (RX)
+//   13:  UART1 TX  --> neck GPIO35 (RX)
+//
+//  GPIO 22 carries this board's onboard LED; it is unused by the firmware.
 //
 //  Limit switches (two NC switches per axis in SERIES -> one input each, with an
 //  external 10k pull-up to 3.3V; LOW = in range, HIGH = limit hit / broken wire).
