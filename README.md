@@ -55,7 +55,9 @@ The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), 
 | 34 | eye-left limit switches (input, external pull-up) |
 | 35 | eye-right limit switches (input, external pull-up) |
 
-All links use plain bidirectional GPIOs; strapping pins (0/2/12/15), flash pins (6-11), and input-only pins (34-39) are avoided so the firmware runs on any of these WROOM boards.
+The links and step/dir use plain bidirectional GPIOs (strapping pins 0/2/12/15 and flash pins 6-11 are avoided). The two limit inputs use the input-only pins 34/35, each with an external 10k pull-up to 3.3V.
+
+Note: some of these LiPo dev boards route battery sense to GPIO35 (or an LED to GPIO2). Verify your board before wiring the eye-right limit to GPIO35; **GPIO36 and GPIO39** are free input-only pins to move it to if needed. Limit switches are not required for normal operation, so you can wire them later.
 
 ## Pin diagram
 
