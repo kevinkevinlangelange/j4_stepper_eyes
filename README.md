@@ -61,19 +61,28 @@ GPIO 35 is deliberately left unused, because some of these LiPo dev boards route
 
 ## Pin diagram
 
-```
-                   ESP32-DEV (WROOM)  -  j4_stepper_eyes
-                  +--------------------------------------+
-   neck 22 (TX) ->| 4  (UART1 RX)                        |
-   neck 35 (RX) <-| 13 (UART1 TX)                        |
-                  |                                      |
-  eye L STEP/DIR  | 26 / 25         ---> TMC2209 (eye L, addr 0b00)
-  eye R STEP/DIR  | 33 / 32         ---> TMC2209 (eye R, addr 0b01)
-   TMC2209 UART   | 17 TX   16 RX   (shared PDN_UART bus)|
-   limit inputs <-| 34 (EL)  36 (ER)                     |
-                  |        3V3   GND   VIN   VM(12-24V)  |
-                  +--------------------------------------+
+Same board as j4_stepper_neck (ESP32-D0WD, LOLIN32-Lite style). Physical pin
+order, component side up, USB-C at the BOTTOM; rails read top-to-bottom.
 
+```
+      LEFT rail                                RIGHT rail
+                          +--------------+
+       limit ER -- 36 |   |              |   | 3V3   3.3V
+         (free) -- 39 |   |              |   | 22    (free / onboard LED)
+          reset -- EN |   |  ESP32-D0WD  |   | 19    (free)
+       limit EL -- 34 |   |  (LOLIN32-   |   | 23    (free)
+         (free) -- 35 |   |   Lite style)|   | 18    (free)
+      DIR eye-R -- 32 |   |              |   | 5     (free)
+     STEP eye-R -- 33 |   |              |   | 17    TMC2209 UART TX
+      DIR eye-L -- 25 |   |              |   | 16    TMC2209 UART RX
+     STEP eye-L -- 26 |   |              |   | 4     UART1 RX <- neck 22
+         (free) -- 27 |   |              |   | 0     (free / BOOT)
+         (free) -- 14 |   |              |   | 2     (free)
+         (free) -- 12 |   |              |   | 15    (free)
+         ground -- GND|   |              |   | 13    UART1 TX -> neck 35
+                          +---[ USB-C ]--+
+
+   Both TMC2209 share the UART bus (17/16); addresses 0b00 (eye-L) / 0b01 (eye-R).
    Each limit input = two NC switches in series + a 10k pull-up to 3.3V.
 ```
 
