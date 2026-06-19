@@ -53,11 +53,11 @@ The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), 
 | 17 / 16 | TMC2209 UART TX / RX (shared PDN_UART bus) |
 | 4 / 13 | Upstream UART1 RX / TX (to neck board) |
 | 34 | eye-left limit switches (input, external pull-up) |
-| 35 | eye-right limit switches (input, external pull-up) |
+| 36 | eye-right limit switches (input, external pull-up) |
 
-The links and step/dir use plain bidirectional GPIOs (strapping pins 0/2/12/15 and flash pins 6-11 are avoided). The two limit inputs use the input-only pins 34/35, each with an external 10k pull-up to 3.3V.
+The links and step/dir use plain bidirectional GPIOs (strapping pins 0/2/12/15 and flash pins 6-11 are avoided). The two limit inputs use the input-only pins 34/36, each with an external 10k pull-up to 3.3V.
 
-Note: some of these LiPo dev boards route battery sense to GPIO35 (or an LED to GPIO2). Verify your board before wiring the eye-right limit to GPIO35; **GPIO36 and GPIO39** are free input-only pins to move it to if needed. Limit switches are not required for normal operation, so you can wire them later.
+GPIO 35 is deliberately left unused, because some of these LiPo dev boards route battery sense to it (GPIO 39 is also free). Limit switches are not required for normal operation, so you can wire them whenever you add them.
 
 ## Pin diagram
 
@@ -70,7 +70,7 @@ Note: some of these LiPo dev boards route battery sense to GPIO35 (or an LED to 
   eye L STEP/DIR  | 26 / 25         ---> TMC2209 (eye L, addr 0b00)
   eye R STEP/DIR  | 33 / 32         ---> TMC2209 (eye R, addr 0b01)
    TMC2209 UART   | 17 TX   16 RX   (shared PDN_UART bus)|
-   limit inputs <-| 34 (EL)  35 (ER)                     |
+   limit inputs <-| 34 (EL)  36 (ER)                     |
                   |        3V3   GND   VIN   VM(12-24V)  |
                   +--------------------------------------+
 

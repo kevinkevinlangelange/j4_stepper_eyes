@@ -2,6 +2,7 @@
 //         file name:  j4_stepper_eyes.ino
 //      v0_1 created:  2026-06-17 -- CDT -KL
 //      last updated:  2026-06-17 -- CDT
+//      last updated:  2026-06-18 -- CDT
 //            author:  Kevin Lange
 //       description:  Eye-pop stepper driver board for Johnny 4, on an ESP32-DEV
 //                     (WROOM) module. Last node of the stepper daisy chain:
@@ -30,6 +31,9 @@
 //                            a safety stop if a limit trips mid-move. Limit state is
 //                            reported in the status string. SG thresholds and homing
 //                            params still need hardware tuning.
+//                    v0_3 -- Moved the ER limit input off GPIO 35 to GPIO 36 (some
+//                            LiPo dev boards route battery sense to GPIO 35). Limits
+//                            are now 34 (EL) / 36 (ER); 35 and 39 are free.
 //
 //
 //
@@ -58,8 +62,9 @@
 //   13:  UART1 TX  --> neck GPIO22 (RX)
 //
 //  Limit switches (two NC switches per axis in SERIES -> one input each, with an
-//  external 10k pull-up to 3.3V; LOW = in range, HIGH = limit hit / broken wire):
-//   34:  eye-left limits        35:  eye-right limits
+//  external 10k pull-up to 3.3V; LOW = in range, HIGH = limit hit / broken wire).
+//  GPIO 35 is left unused (some LiPo boards route battery sense to it):
+//   34:  eye-left limits        36:  eye-right limits
 //
 //  StallGuard: read over UART (no extra pins). During calibration each eye homes
 //  to a limit switch OR a StallGuard stall (so an eye already against a stop is
@@ -72,9 +77,11 @@
 //  ------------------------------------------------------------------
 //
 //  NOTE: links and step/dir use plain bidirectional GPIOs (strapping pins
-//        0/2/12/15 and flash pins 6-11 avoided). The input-only pins 34/35 are
+//        0/2/12/15 and flash pins 6-11 avoided). The input-only pins 34/36 are
 //        used for the limit inputs, which is what they are good for -- they have
 //        no internal pull-up, hence the external 10k resistors noted above.
+//        GPIO 35 is left free (some LiPo boards use it for battery sense); 39 is
+//        also free.
 //
 //******************************************************************************
 
@@ -125,8 +132,10 @@
 // Two normally-closed switches per axis wired IN SERIES to one input, with an
 // external 10k pull-up to 3.3V. LOW = both closed (in range); HIGH = a limit was
 // hit OR a wire broke (fail-safe). Input-only pins, so external pull-up required.
+// GPIO 35 is deliberately left unused (some LiPo boards put battery sense there);
+// the two limits use 34/36, leaving 39 free.
 #define LIMIT_PIN_EL  34
-#define LIMIT_PIN_ER  35
+#define LIMIT_PIN_ER  36
 static inline bool limitHit(uint8_t pin) { return digitalRead(pin) == HIGH; }
 
 // StallGuard4 (read over UART). SG_RESULT drops toward 0 under load; near 0 is a
