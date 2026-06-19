@@ -3,6 +3,7 @@
 //      v0_1 created:  2026-06-17 -- CDT -KL
 //      last updated:  2026-06-17 -- CDT
 //      last updated:  2026-06-18 -- CDT
+//      last updated:  2026-06-19 -- CDT
 //            author:  Kevin Lange
 //       description:  Eye-pop stepper driver board for Johnny 4, on an ESP32-DEV
 //                     (WROOM) module. Last node of the stepper daisy chain:
@@ -38,6 +39,9 @@
 //                            GPIO 22, unused here). Doc update only: the neck's
 //                            downstream RX moved to GPIO 35, so this board's TX
 //                            (pin 13) now wires to neck GPIO 35.
+//                    v0_5 -- Doc update only: the neck does not break out GPIO21, so
+//                            its downstream TX moved to GPIO 22. This board's RX
+//                            (pin 4) now wires to neck GPIO 22.
 //
 //
 //
@@ -62,7 +66,7 @@
 //        addresses: eye-left = 0b00, eye-right = 0b01
 //
 //  Upstream link to j4_stepper_neck, UART1, 2-way:
-//   04:  UART1 RX  <-- neck GPIO21 (TX)
+//   04:  UART1 RX  <-- neck GPIO22 (TX)
 //   13:  UART1 TX  --> neck GPIO35 (RX)
 //
 //  GPIO 22 carries this board's onboard LED; it is unused by the firmware.

@@ -64,7 +64,7 @@ GPIO 35 is deliberately left unused, because some of these LiPo dev boards route
 ```
                    ESP32-DEV (WROOM)  -  j4_stepper_eyes
                   +--------------------------------------+
-   neck 21 (TX) ->| 4  (UART1 RX)                        |
+   neck 22 (TX) ->| 4  (UART1 RX)                        |
    neck 35 (RX) <-| 13 (UART1 TX)                        |
                   |                                      |
   eye L STEP/DIR  | 26 / 25         ---> TMC2209 (eye L, addr 0b00)
