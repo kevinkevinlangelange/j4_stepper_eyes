@@ -1,6 +1,6 @@
 # j4_stepper_eyes
 
-> **RETIRED (2026-07-02).** This board has been absorbed into [j4_stepper_neck](https://github.com/kevinkevinlangelange/j4_stepper_neck): swapping the neck drivers from TMC5160T to STEPPERONLINE DM556TE freed the six SPI pins there, which was exactly enough to move the two eye-pop TMC2209 channels onto the neck board and delete the downstream UART link. All five steppers now run from j4_stepper_neck (v0_10+). This repo is kept for reference and is no longer maintained.
+> **RETIRED (2026-07-02).** This board has been absorbed into [j4_stepper](https://github.com/kevinkevinlangelange/j4_stepper) (renamed from j4_stepper_neck): swapping the neck drivers from TMC5160T to STEPPERONLINE DM556TE freed the six SPI pins there, which was exactly enough to move the two eye-pop TMC2209 channels onto that board and delete the downstream UART link. All five steppers now run from j4_stepper (v0_10+). This repo is kept for reference and is no longer maintained.
 
 Eye-pop stepper driver board for the Johnny 4 robot, and the last node of the stepper daisy chain. Runs on an ESP32-DEV (WROOM) module. It drives the two eye-pop steppers through TMC2209 drivers and reports their health back upstream. Step pulses run on the ESP32 RMT peripheral via FastAccelStepper.
 
