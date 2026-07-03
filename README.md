@@ -1,8 +1,8 @@
 # j4_stepper_eyes
 
-> **RETIRED (2026-07-02).** This board has been absorbed into [j4_stepper](https://github.com/kevinkevinlangelange/j4_stepper) (renamed from j4_stepper_neck): swapping the neck drivers from TMC5160T to STEPPERONLINE DM556TE freed the six SPI pins there, which was exactly enough to move the two eye-pop TMC2209 channels onto that board and delete the downstream UART link. All five steppers now run from j4_stepper (v0_10+). This repo is kept for reference and is no longer maintained.
-
 Eye-pop stepper driver board for the Johnny 4 robot, and the last node of the stepper daisy chain. Runs on an ESP32-DEV (WROOM) module. It drives the two eye-pop steppers through TMC2209 drivers and reports their health back upstream. Step pulses run on the ESP32 RMT peripheral via FastAccelStepper.
+
+This board was briefly retired (its two channels were consolidated onto the neck board), then revived as of v0_6: with its own ESP32 there are enough pins to give **every limit switch its own input**, so the firmware knows exactly which endpoint was hit.
 
 ## Daisy chain
 
@@ -10,7 +10,7 @@ Eye-pop stepper driver board for the Johnny 4 robot, and the last node of the st
   j4_receiver (TTGO)
         |  UART1
         v
-  j4_stepper_neck   (3x TMC5160T)
+  j4_stepper_neck   (3x DM556TE)
         |  UART2
         v
   j4_stepper_eyes   (2x TMC2209)   <-- this board
@@ -42,9 +42,9 @@ The eyes always pop to the same value, so a single shared STEP/DIR signal would 
 |-----------|---------|---------|
 | in | `<eye>\n` | eye-pop target (0-3200, same scale as the neck) |
 | in | `CAL\n` | run a homing/calibration pass on both eyes |
-| out | `S:<text>\n` | status: `S:OK`, `S:EL OT`, `S:EL LIMIT`, etc. |
+| out | `S:<text>\n` | status: `S:OK`, `S:EL OT`, `S:EL MIN`, `S:ER MAX`, etc. |
 
-The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), `SHORT`, `OTPW` (overtemp prewarning), `OPEN` (open load), or `LIMIT` (a limit switch is engaged or its wire is broken). The parser uses a fixed char buffer (no Arduino `String`).
+The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), `SHORT`, `OTPW` (overtemp prewarning), `OPEN` (open load), or `MIN`/`MAX` (that exact limit switch is engaged or its wire is broken). The parser uses a fixed char buffer (no Arduino `String`).
 
 ## Pin assignments
 
@@ -54,12 +54,14 @@ The status tokens are `EL`/`ER` (eye left/right) plus `OT` (overtemp shutdown), 
 | 33 / 32 | eye-right STEP / DIR |
 | 17 / 16 | TMC2209 UART TX / RX (shared PDN_UART bus) |
 | 4 / 13 | Upstream UART1 RX / TX (to neck board) |
-| 34 | eye-left limit switches (input, external pull-up) |
-| 36 | eye-right limit switches (input, external pull-up) |
+| 34 | eye-left MIN limit (input-only, external 10k pull-up) |
+| 39 | eye-left MAX limit (input-only, external 10k pull-up) |
+| 36 | eye-right MIN limit (input-only, external 10k pull-up) |
+| 35 | eye-right MAX limit (input-only, external 10k pull-up) |
 
-The links and step/dir use plain bidirectional GPIOs (strapping pins 0/2/12/15 and flash pins 6-11 are avoided). The two limit inputs use the input-only pins 34/36, each with an external 10k pull-up to 3.3V.
+The links and step/dir use plain bidirectional GPIOs (strapping pins 0/2/12/15 and flash pins 6-11 are avoided). The four limit inputs use the input-only pins 34/35/36/39, each with an external 10k pull-up to 3.3V (input-only pins have no internal pull-up). This board has no battery-sense pin, so GPIO 35 is safe to use.
 
-GPIO 35 is deliberately left unused, because some of these LiPo dev boards route battery sense to it (GPIO 39 is also free). Limit switches are not required for normal operation, so you can wire them whenever you add them.
+Limit switches are not required for normal operation, so you can wire them whenever you add them.
 
 ## Pin diagram
 
@@ -69,11 +71,11 @@ order, component side up, USB-C at the BOTTOM; rails read top-to-bottom.
 ```
       LEFT rail                                RIGHT rail
                           +--------------+
-       limit ER -- 36 |   |              |   | 3V3   3.3V
-         (free) -- 39 |   |              |   | 22    (free / onboard LED)
+   limit ER MIN -- 36 |   |              |   | 3V3   3.3V (limit pull-ups)
+   limit EL MAX -- 39 |   |              |   | 22    (free / onboard LED)
           reset -- EN |   |  ESP32-D0WD  |   | 19    (free)
-       limit EL -- 34 |   |  (LOLIN32-   |   | 23    (free)
-         (free) -- 35 |   |   Lite style)|   | 18    (free)
+   limit EL MIN -- 34 |   |  (LOLIN32-   |   | 23    (free)
+   limit ER MAX -- 35 |   |   Lite style)|   | 18    (free)
       DIR eye-R -- 32 |   |              |   | 5     (free)
      STEP eye-R -- 33 |   |              |   | 17    TMC2209 UART TX
       DIR eye-L -- 25 |   |              |   | 16    TMC2209 UART RX
@@ -85,7 +87,8 @@ order, component side up, USB-C at the BOTTOM; rails read top-to-bottom.
                           +---[ USB-C ]--+
 
    Both TMC2209 share the UART bus (17/16); addresses 0b00 (eye-L) / 0b01 (eye-R).
-   Each limit input = two NC switches in series + a 10k pull-up to 3.3V.
+   Limits: one NC switch per endpoint, each with a 10k pull-up to 3.3V
+   (input-only pins have no internal pull-up).
 ```
 
 ## Power and enable
@@ -98,10 +101,10 @@ Eye-pop motion matches the neck so it has the same smooth ramp: `EYE_SPEED_HZ` (
 
 ## Limit switches and calibration
 
-Each eye has **two normally-closed (NC) switches wired in series** to one input (GPIO 34/35), with an **external 10k pull-up to 3.3V**. Both closed (in range) reads LOW; either switch opening, or a broken wire, reads HIGH and is treated as a limit hit (fail-safe).
+Each eye has **one normally-closed (NC) switch per endpoint** -- four inputs total. Each switch shorts its input to GND while the eye is in range: LOW = in range, HIGH = that endpoint was hit **or** its wire broke (fail-safe). `MIN` is the home end that `CAL` drives toward; `MAX` is the far end. All four inputs are on input-only pins and need an **external 10k pull-up to 3.3V** each.
 
-- **In normal operation**, if a limit trips while an eye is moving, that eye is stopped immediately.
-- **On a `CAL` command** (sent down the chain by the neck board), each eye homes **independently**: it drives slowly toward the home end until the limit switch trips **or** StallGuard detects a hard stop, backs off, and zeros. StallGuard (read over the TMC2209 UART, no extra pins) catches an eye that is **already against a stop** when calibration starts -- it stalls the instant it tries to push further.
+- **In normal operation** the safety check is direction-aware: an eye is stopped only when it is moving *toward* a tripped endpoint, so a stopped eye can always drive itself back off a limit.
+- **On a `CAL` command** (sent down the chain by the neck board), each eye homes **independently** toward its MIN switch. An eye already sitting on the switch is detected immediately (the switch reads pressed) and just backs off and zeros. StallGuard (read over the TMC2209 UART, no extra pins) stays as a backup: it catches an eye that **jams short of the switch**. Hitting the MAX switch during homing stops the eye (wrong direction or a wiring fault).
 
 The StallGuard threshold (`SG_SGTHRS`, `SG_STALL_LEVEL`) and the homing speed/back-off are `#define`s at the top of `main.cpp` and **need tuning on the real mechanism**.
 

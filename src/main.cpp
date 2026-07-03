@@ -4,6 +4,7 @@
 //      last updated:  2026-06-17 -- CDT
 //      last updated:  2026-06-18 -- CDT
 //      last updated:  2026-06-19 -- CDT
+//      last updated:  2026-07-03 -- CDT
 //            author:  Kevin Lange
 //       description:  Eye-pop stepper driver board for Johnny 4, on an ESP32-DEV
 //                     (WROOM) module. Last node of the stepper daisy chain:
@@ -42,6 +43,17 @@
 //                    v0_5 -- Doc update only: the neck does not break out GPIO21, so
 //                            its downstream TX moved to GPIO 22. This board's RX
 //                            (pin 4) now wires to neck GPIO 22.
+//                    v0_6 -- Board revived after a brief consolidation onto the neck
+//                            board. Every limit switch now has its OWN input: one NC
+//                            switch per axis endpoint, four inputs total, all on the
+//                            input-only pins (EL MIN 34 / EL MAX 39 / ER MIN 36 /
+//                            ER MAX 35, external 10k pull-ups). Faults name the
+//                            exact switch ("EL MIN", "ER MAX", ...). Homing detects
+//                            "already on the home switch" directly and backs off
+//                            first; StallGuard4 stays as a backup jam detector. Mid-
+//                            move safety is direction-aware: only a move TOWARD a
+//                            tripped end is stopped, so an eye can always drive
+//                            itself back off a limit.
 //
 //
 //
@@ -71,13 +83,15 @@
 //
 //  GPIO 22 carries this board's onboard LED; it is unused by the firmware.
 //
-//  Limit switches (two NC switches per axis in SERIES -> one input each, with an
-//  external 10k pull-up to 3.3V; LOW = in range, HIGH = limit hit / broken wire).
-//  GPIO 35 is left unused (some LiPo boards route battery sense to it):
-//   34:  eye-left limits        36:  eye-right limits
+//  Limit switches -- ONE NC switch per axis endpoint, four inputs total, all on
+//  the input-only pins (external 10k pull-up to 3.3V each; LOW = in range,
+//  HIGH = that endpoint hit / broken wire). MIN = home end (CAL drives toward
+//  it); MAX = far end. GPIO 35 is safe here (no battery-sense on this board):
+//   34:  eye-left  MIN          39:  eye-left  MAX
+//   36:  eye-right MIN          35:  eye-right MAX
 //
 //  StallGuard: read over UART (no extra pins). During calibration each eye homes
-//  to a limit switch OR a StallGuard stall (so an eye already against a stop is
+//  to its MIN switch OR a StallGuard stall (so an eye jammed short of the switch is
 //  caught at once). Thresholds in the code need tuning on the real mechanism.
 //
 //  Power / enable:
@@ -87,11 +101,9 @@
 //  ------------------------------------------------------------------
 //
 //  NOTE: links and step/dir use plain bidirectional GPIOs (strapping pins
-//        0/2/12/15 and flash pins 6-11 avoided). The input-only pins 34/36 are
-//        used for the limit inputs, which is what they are good for -- they have
-//        no internal pull-up, hence the external 10k resistors noted above.
-//        GPIO 35 is left free (some LiPo boards use it for battery sense); 39 is
-//        also free.
+//        0/2/12/15 and flash pins 6-11 avoided). The input-only pins 34/35/36/39
+//        carry the four limit inputs, which is what they are good for -- they
+//        have no internal pull-up, hence the external 10k resistors noted above.
 //
 //******************************************************************************
 
@@ -139,13 +151,16 @@
 // ---------------------------------------------------------------------------
 // LIMIT SWITCHES + STALLGUARD
 // ---------------------------------------------------------------------------
-// Two normally-closed switches per axis wired IN SERIES to one input, with an
-// external 10k pull-up to 3.3V. LOW = both closed (in range); HIGH = a limit was
-// hit OR a wire broke (fail-safe). Input-only pins, so external pull-up required.
-// GPIO 35 is deliberately left unused (some LiPo boards put battery sense there);
-// the two limits use 34/36, leaving 39 free.
-#define LIMIT_PIN_EL  34
-#define LIMIT_PIN_ER  36
+// One normally-closed switch per axis endpoint, four inputs total. Each switch
+// shorts its input to GND while the eye is in range: LOW = in range, HIGH =
+// that endpoint was hit OR its wire broke (fail-safe). Since every endpoint has
+// its own input, faults can name the exact switch. All four are input-only pins
+// (no internal pull-up), so each needs an external 10k to 3.3V. MIN = the home
+// end that CAL drives toward; MAX = the far end.
+#define LIMIT_PIN_EL_MIN  34
+#define LIMIT_PIN_EL_MAX  39
+#define LIMIT_PIN_ER_MIN  36
+#define LIMIT_PIN_ER_MAX  35
 static inline bool limitHit(uint8_t pin) { return digitalRead(pin) == HIGH; }
 
 // StallGuard4 (read over UART). SG_RESULT drops toward 0 under load; near 0 is a
@@ -226,13 +241,16 @@ const char *faultToken2209(TMC2209Stepper &d) {
 }
 
 
-// Build the status string sent upstream: first faulting eye driver, else OK.
+// Build the status string sent upstream: first faulting eye driver, then the
+// first tripped limit switch (named exactly), else OK.
 void buildStatus(char *out, size_t n) {
   const char *t;
   if ((t = faultToken2209(tmc_EL))[0])      snprintf(out, n, "EL %s", t);
   else if ((t = faultToken2209(tmc_ER))[0]) snprintf(out, n, "ER %s", t);
-  else if (limitHit(LIMIT_PIN_EL))          { strncpy(out, "EL LIMIT", n); out[n - 1] = '\0'; }
-  else if (limitHit(LIMIT_PIN_ER))          { strncpy(out, "ER LIMIT", n); out[n - 1] = '\0'; }
+  else if (limitHit(LIMIT_PIN_EL_MIN))      { strncpy(out, "EL MIN", n); out[n - 1] = '\0'; }
+  else if (limitHit(LIMIT_PIN_EL_MAX))      { strncpy(out, "EL MAX", n); out[n - 1] = '\0'; }
+  else if (limitHit(LIMIT_PIN_ER_MIN))      { strncpy(out, "ER MIN", n); out[n - 1] = '\0'; }
+  else if (limitHit(LIMIT_PIN_ER_MAX))      { strncpy(out, "ER MAX", n); out[n - 1] = '\0'; }
   else { strncpy(out, "OK", n); out[n - 1] = '\0'; }
 }
 
@@ -251,42 +269,55 @@ void configTmc2209(TMC2209Stepper &drv) {
 }
 
 
-// Safety: if an eye is moving and its limit trips, stop it immediately.
+// Safety: if an eye is moving TOWARD a tripped endpoint, stop it. Knowing which
+// end tripped means a move away from the switch is still allowed, so an eye can
+// always drive itself back off a limit.
+void checkAxisLimits(FastAccelStepper *s, uint8_t minPin, uint8_t maxPin) {
+  if (!s || !s->isRunning()) return;
+  bool movingDown = s->targetPos() < s->getCurrentPosition();
+  if (movingDown  && limitHit(minPin)) s->forceStop();
+  if (!movingDown && limitHit(maxPin)) s->forceStop();
+}
+
 void checkLimits() {
-  if (stepper_EL && stepper_EL->isRunning() && limitHit(LIMIT_PIN_EL)) stepper_EL->forceStop();
-  if (stepper_ER && stepper_ER->isRunning() && limitHit(LIMIT_PIN_ER)) stepper_ER->forceStop();
+  checkAxisLimits(stepper_EL, LIMIT_PIN_EL_MIN, LIMIT_PIN_EL_MAX);
+  checkAxisLimits(stepper_ER, LIMIT_PIN_ER_MIN, LIMIT_PIN_ER_MAX);
 }
 
 
-// Home one eye: drive toward the home (negative) end until the limit switch trips
-// or StallGuard detects a hard stop (catches an eye already against a stop), then
-// back off and zero. NEEDS HARDWARE VALIDATION -- direction/speed/backoff/SG tunable.
-void homeAxis(FastAccelStepper *s, uint8_t limitPin, TMC2209Stepper &drv) {
+// Home one eye toward its MIN switch. An eye already sitting on the switch is
+// detected immediately (the switch reads pressed) and just backs off and zeros.
+// StallGuard stays as a backup: it catches a jam short of the switch. NEEDS
+// HARDWARE VALIDATION -- direction/speed/backoff/SG tunable above.
+void homeAxis(FastAccelStepper *s, uint8_t minPin, uint8_t maxPin, TMC2209Stepper &drv) {
   if (!s) return;
   s->setSpeedInHz(HOMING_SPEED_HZ);
   s->setAcceleration(HOMING_ACCEL);
-
-  // Approach the home (negative) end. With one shared series input we can't tell
-  // the two ends apart, so only trust the limit switch once we've seen it read
-  // clear (LOW) at least once -- that way starting against the FAR limit just
-  // drives us off it and onward to home. StallGuard stops a real jam immediately
-  // (this is what catches an eye already pinned against the HOME stop at start).
-  s->move(-1000000);
-  bool seenClear = !limitHit(limitPin);
   unsigned long t0 = millis();
-  while (s->isRunning()) {
-    if (!limitHit(limitPin))                  seenClear = true;
-    if (stalled2209(drv))                     { s->forceStop(); break; }
-    if (seenClear && limitHit(limitPin))      { s->forceStop(); break; }
-    if (millis() - t0 > HOMING_TIMEOUT_MS)    { s->forceStop(); break; }
-    delay(1);
-  }
-  delay(50);
 
+  // Approach the MIN end unless we are already pressing its switch.
+  if (!limitHit(minPin)) {
+    s->move(-1000000);
+    while (s->isRunning()) {
+      if (limitHit(minPin))                  { s->forceStop(); break; }
+      if (limitHit(maxPin))                  { s->forceStop(); break; }  // wrong end / wiring fault
+      if (stalled2209(drv))                  { s->forceStop(); break; }  // jammed short of the switch
+      if (millis() - t0 > HOMING_TIMEOUT_MS) { s->forceStop(); break; }
+      delay(1);
+    }
+    delay(50);
+  }
+
+  // Back off until the MIN switch releases (retry in fixed nudges), then zero.
   s->setCurrentPosition(0);
-  s->move(HOMING_BACKOFF);
   t0 = millis();
-  while (s->isRunning() && (millis() - t0 < HOMING_TIMEOUT_MS)) delay(1);
+  while (limitHit(minPin) && (millis() - t0 < HOMING_TIMEOUT_MS)) {
+    s->move(HOMING_BACKOFF);
+    while (s->isRunning() && limitHit(minPin) &&
+           (millis() - t0 < HOMING_TIMEOUT_MS)) delay(1);
+  }
+  s->forceStop();
+  delay(50);
   s->setCurrentPosition(0);
 
   s->setSpeedInHz(EYE_SPEED_HZ);
@@ -296,8 +327,8 @@ void homeAxis(FastAccelStepper *s, uint8_t limitPin, TMC2209Stepper &drv) {
 
 // Home both eyes independently (the whole point of separate channels).
 void calibrate() {
-  homeAxis(stepper_EL, LIMIT_PIN_EL, tmc_EL);
-  homeAxis(stepper_ER, LIMIT_PIN_ER, tmc_ER);
+  homeAxis(stepper_EL, LIMIT_PIN_EL_MIN, LIMIT_PIN_EL_MAX, tmc_EL);
+  homeAxis(stepper_ER, LIMIT_PIN_ER_MIN, LIMIT_PIN_ER_MAX, tmc_ER);
   last_eye = -1;   // force a fresh move on the next packet
 }
 
@@ -322,9 +353,11 @@ void setup() {
   // --- Upstream link to the neck board ---
   upSerial.begin(LINK_BAUD, SERIAL_8N1, UP_RX_PIN, UP_TX_PIN);
 
-  // --- Limit switches (series NC, external pull-up -> plain INPUT) ---
-  pinMode(LIMIT_PIN_EL, INPUT);
-  pinMode(LIMIT_PIN_ER, INPUT);
+  // --- Limit switches (one NC per endpoint, external pull-ups -> plain INPUT) ---
+  pinMode(LIMIT_PIN_EL_MIN, INPUT);
+  pinMode(LIMIT_PIN_EL_MAX, INPUT);
+  pinMode(LIMIT_PIN_ER_MIN, INPUT);
+  pinMode(LIMIT_PIN_ER_MAX, INPUT);
 
   // --- TMC2209 drivers over shared UART ---
   tmcSerial.begin(115200, SERIAL_8N1, TMC2209_RX, TMC2209_TX);
