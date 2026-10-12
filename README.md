@@ -87,6 +87,8 @@ order, component side up, USB-C at the BOTTOM; rails read top-to-bottom.
                           +---[ USB-C ]--+
 
    Both TMC2209 share the UART bus (17/16); addresses 0b00 (eye-L) / 0b01 (eye-R).
+   Address straps: eye-L MS1 -> GND, MS2 -> GND ; eye-R MS1 -> VIO, MS2 -> GND.
+   GPIO 16 (RX) sits on the PDN_UART line; GPIO 17 (TX) reaches it through 1k.
    Limits: one NC switch per endpoint, each with a 10k pull-up to 3.3V
    (input-only pins have no internal pull-up).
 ```
